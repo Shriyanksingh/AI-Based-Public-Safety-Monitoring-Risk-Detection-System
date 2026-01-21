@@ -47,7 +47,7 @@ class CrowdSafetyMonitor:
         self.motHist = deque(maxlen=60)
         self.velHist = deque(maxlen=30)
         
-        # Thresholds - tuned for mall environments
+        # Initial thresholds
         # 50 people = low occupancy, 150 = medium, 250+ = crowded (adjust per venue)
         self.baseSamples = 60
         self.confThresh = 0.25
@@ -178,10 +178,8 @@ class CrowdSafetyMonitor:
             total_person_area = sum(areas)
             coverage_ratio = total_person_area / area
             
-        else:
-            clustering = 0
-            avg_person_area = 0
-            coverage_ratio = 0
+            
+        
         
         return {
             'density_ratio': density,
@@ -223,34 +221,27 @@ class CrowdSafetyMonitor:
         current_time = self.frame_count/self.fps_video
         person_count = density_metrics['count']
         
-        if person_count < 50:
+        if person_count < 20:
             if self.check_alert_cooldown('LOW_DENSITY'):
                 anomalies.append({
-                    'type': 'LOW_DENSITY',
-                    'risk': 'LOW',
+                    'Risk_type': 'LOW_DENSITY',
+                    'risk': 50,
                     'reason': f'Low crowd desnity: {person_count} people detected',
                     'confidence': 0.6
                 })
         elif 50 <= person_count <= 150:
             if self.check_alert_cooldown('MEDIUM_DENSITY'):
                 anomalies.append({
-                    'type': 'MEDIUM_DENSITY',
+                    'risk_type': 'MEDIUM_DENSITY',
                     'risk': 'MEDIUM',
-                    'reason': f'Mediun crowd density: {person_count} people detected',
+                    'reason': f'Medium crowd density: {person_count} people detected',
                     'confidence': 0.8
                 })
         elif person_count > 150:
-            if self.check_alert_cooldown('HIGH_DENSITY'):
-                anomalies.append({
-                    'type': 'HIGH_DENSITY',
-                    'risk': 'HIGH',
-                    'reason': f'Hight crowd density: {person_count} people detected',
-                    'confidence': 0.95
-                })
-        
-        # 2. MOTION-BASED ANOMALIES
-        if motion_metrics:
-            motion_z = self.calculate_z_score(
+
+            # 2. MOTION-BASED ANOMALIES
+            if motion_metrics:
+                motion_z = self.calculate_z_score(
                 motion_metrics['avg_motion'],
                 self.baseMotion
             )
@@ -260,47 +251,53 @@ class CrowdSafetyMonitor:
                 if self.check_alert_cooldown('ACCELERATION'):
                     risk = 'HIGH' if motion_z > 5.0 else 'MEDIUM'
                     anomalies.append({
-                        'type': 'SUDDEN_ACCELERATION',
-                        'risk': risk,
-                        'reason': f'Rapid crowd movement: motion={motion_metrics["avg_motion"]:.2f} (z-score: {motion_z:.2f})',
-                        'confidence': min(motion_z / 6.0, 1.0)
+                        'risk_type': 'High',
+                        'risk': 85,
+                        'reason': f'High crowd density: {person_count} people detected',
+                        'supporting_factor': f'Rapid crowd movement: motion={motion_metrics["avg_motion"]:.2f} (z-score: {motion_z:.2f})',
+                        'confidence': 80
                     })
             
             # Chaotic Movement (high entropy + high variance)
-            if motion_metrics['entropy'] > 3.5 and motion_metrics['directional_variance'] > 50:
+            elif motion_metrics['entropy'] > 3.5 and motion_metrics['directional_variance'] > 50:
                 if self.check_alert_cooldown('CHAOS'):
                     anomalies.append({
-                        'type': 'CHAOTIC_MOVEMENT',
-                        'risk': 'MEDIUM',
-                        'reason': f'Irregular movement patterns detected (entropy: {motion_metrics["entropy"]:.2f})',
+                        'risk_type': 'High',
+                        'risk': '85',
+                        'reason': f'High crowd density: {person_count} people detected',
+                        'supporting_factor': f'Irregular movement patterns detected (entropy: {motion_metrics["entropy"]:.2f})',
                         'confidence': 0.75
                     })
             
             # High velocity with high density (critical condition)
-            if (motion_metrics['p95_motion'] > 15 and 
+            elif (motion_metrics['p95_motion'] > 15 and 
                 density_metrics['density_ratio'] > self.baseDensity['mean'] * 1.5):
                 if self.check_alert_cooldown('CRITICAL'):
                     anomalies.append({
-                        'type': 'CRITICAL_CONDITION',
-                        'risk': 'HIGH',
-                        'reason': 'High-density area with rapid movement - stampede risk',
+                        'risk_type': 'High',
+                        'risk': '90',
+                        'reason': f'High crowd density: {person_count} people detected',
+                        'supporting_factor': 'High-density area with rapid movement - stampede risk',
                         'confidence': 0.9
                     })
-        
-        # 3. TEMPORAL ANOMALIES
-        # Rapid Dispersal
-        if len(self.densHist) >= 30:
-            recent_densities = [d['density_ratio'] for d in list(self.densHist)[-30:]]
-            density_change_rate = (recent_densities[-1] - recent_densities[0]) / 30
+
+            # 3. TEMPORAL ANOMALIES
+            # Rapid Dispersal        
+            elif len(self.densHist) >= 30:
+                recent_densities = [d['density_ratio'] for d in list(self.densHist)[-30:]]
+                density_change_rate = (recent_densities[-1] - recent_densities[0]) / 30
             
-            if density_change_rate < -2.0 and recent_densities[0] > 20:
-                if self.check_alert_cooldown('DISPERSAL'):
-                    anomalies.append({
-                        'type': 'RAPID_DISPERSAL',
-                        'risk': 'MEDIUM',
-                        'reason': f'Rapid crowd dispersal detected (rate: {density_change_rate:.2f}/frame)',
-                        'confidence': 0.8
+                if density_change_rate < -2.0 and recent_densities[0] > 20:
+                    if self.check_alert_cooldown('DISPERSAL'):
+                        anomalies.append({
+                            'risk_type': 'High',
+                            'risk': '82',
+                            'reason': f'High crowd density: {person_count} people detected',
+                            'supporting_factor': f'Rapid crowd dispersal detected (rate: {density_change_rate:.2f}/frame)',
+                            'confidence': 0.8
                     })
+       
+       
         
         return anomalies
     
@@ -318,27 +315,29 @@ class CrowdSafetyMonitor:
     def generate_alert(self, anomalies, timestamp):
         """Generate detailled alerts with confidence scores"""
         for anomaly in anomalies:
-            alert = {
-                'timestamp': timestamp,
-                'frame': self.frame_count,
-                'risk_level': anomaly['risk'],
-                'type': anomaly['type'],
-                'explanation': anomaly['reason'],
-                'confidence': anomaly.get('confidence', 1.0)
-            }
+            if anomaly['risk'] >= 70 and anomaly['confidence'] > 0.75:
+                alert = {
+                    'timestamp': timestamp,
+                    'frame': self.frame_count,
+                    'risk_level': anomaly['risk'],
+                    'type': anomaly['risk_type'],
+                    'explanation': anomaly['reason'],
+                    'confidence': anomaly.get('confidence', 1.0)
+                }
+                
+                self.alerts.append(alert)
+                
+                # Console output with color coding
+                print("\n" + "="*70)
+                print(f"ALERT DETECTED - {anomaly['risk']} RISK")
+                print("="*70)
+                print(f"Timestamp: {alert['timestamp']}")
+                print(f"Frame: {alert['frame']}/{self.total_frames}")
+                print(f"Type: {alert['type']}")
+                print(f"Confidence: {alert['confidence']:.1%}")
+                print(f"Details: {alert['explanation']}")
+                print("="*70 + "\n")
             
-            self.alerts.append(alert)
-            
-            # Console output with color coding
-            print("\n" + "="*70)
-            print(f"ALERT DETECTED - {anomaly['risk']} RISK")
-            print("="*70)
-            print(f"Timestamp: {alert['timestamp']}")
-            print(f"Frame: {alert['frame']}/{self.total_frames}")
-            print(f"Type: {alert['type']}")
-            print(f"Confidence: {alert['confidence']:.1%}")
-            print(f"Details: {alert['explanation']}")
-            print("="*70 + "\n")
     
     def process_video(self, display=False, save_output=False):
         """Main video procesing loop."""
@@ -501,14 +500,7 @@ class CrowdSafetyMonitor:
             print("No alerts triggered")
         
         # Performance metrics
-        false_positive_estimate = len([a for a in self.alerts if a['confidence'] < 0.7])
-        if self.alerts:
-            accuracy_estimate = ((len(self.alerts) - false_positive_estimate) / 
-                               len(self.alerts)) * 100
-            print(f"\n Estimated Accuracy: {accuracy_estimate:.1f}%")
-            print(f"Potential False Positives: {false_positive_estimate}")
         
-        print("\n" + "="*70)
         
         self.save_alerts()
     
